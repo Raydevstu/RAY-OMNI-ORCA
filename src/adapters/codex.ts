@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type Action, installAgentsBlock, installSkills, paths, upsertBlock, writeFile } from './shared.js';
 
@@ -14,7 +14,15 @@ export function installCodex(root: string, dry = false): Action[] {
   actions.push({ path: cfg, action: 'MCP server (project scope; Codex loads it only after you trust the project)' });
 
   const hp = join(root, '.codex/hooks.json');
-  const json = existsSync(hp) ? JSON.parse(readFileSync(hp, 'utf8')) : {};
+  let json: { hooks?: Record<string, Array<Record<string, unknown>>> } = {};
+  if (existsSync(hp)) {
+    try { json = JSON.parse(readFileSync(hp, 'utf8')); }
+    catch {
+      const bak = `${hp}.bak.${Date.now()}`;
+      copyFileSync(hp, bak);
+      throw new Error(`Invalid JSON in ${hp} (backed up to ${bak}). Fix the file or run orch doctor --fix, then re-run init.`);
+    }
+  }
   json.hooks ??= {};
   for (const ev of EVENTS) {
     const command = `node --disable-warning=ExperimentalWarning ${JSON.stringify(paths.cli)} hook ${ev} --root ${JSON.stringify(root)}`;

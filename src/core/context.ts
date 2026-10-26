@@ -49,7 +49,7 @@ export function buildInjection(root: string, prompt: string, opts: { maxTokens?:
   if (spec.edgeCases.length) lines.push('Edge cases to handle and cover with tests:', ...spec.edgeCases.map(e => `- ${e.label}`));
   add(lines.join('\n'));
 
-  const all = loadSkills([join(root, '.agents/skills'), bundledSkills]);
+  const all = loadSkills([join(root, '.agents/skills'), join(root, '.agents/skills/orch'), bundledSkills]);
   const picked = selectSkills(`${prompt} ${spec.areas.join(' ')}`, all);
   const used_skills: string[] = [];
   for (const p of picked) {

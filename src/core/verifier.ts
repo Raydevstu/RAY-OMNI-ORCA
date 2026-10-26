@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { changedFiles, git } from './git.js';
 import { classify } from './gates.js';
+import { loadConfig, shouldProcessPath } from './config.js';
 import { detectSecrets, envValues, redact } from './redact.js';
 import { assessCoverage, checklistFor, type Coverage } from './edgecases.js';
 import { loadTasks } from './tasks.js';
@@ -66,13 +67,18 @@ export async function checkRegistry(names: string[], fetchFn: typeof fetch = fet
 }
 
 export async function verify(root: string, map: ProjectMap, opts: { network?: boolean; fetchFn?: typeof fetch } = {}): Promise<VerifyReport> {
-  const { changed, deleted } = changedFiles(root);
+  const cfg = loadConfig(root);
+  const network = opts.network ?? cfg.networkDependencyAudit; // default false: local-first
+  const all = changedFiles(root);
+  const changed = all.changed.filter(f => shouldProcessPath(root, f));
+  const deleted = all.deleted;
   const checks = runCommands(root, map);
   const findings = scanChangedFiles(root, changed);
   const added = addedDependencies(root);
   if (added.length) {
     findings.push({ severity: 'info', kind: 'dependency', detail: `new dependencies: ${added.join(', ')}` });
-    if (opts.network !== false) findings.push(...await checkRegistry(added, opts.fetchFn));
+    if (network) findings.push(...await checkRegistry(added, opts.fetchFn));
+    else findings.push({ severity: 'info', kind: 'dependency', detail: 'registry audit skipped (network-audit-disabled)' });
   }
   const gates = classify({ paths: [...changed, ...deleted], deletedPaths: deleted });
   let edgeCases: Coverage | null = null;

@@ -20,7 +20,10 @@ export function installHermes(root: string, opts: { dry?: boolean; home?: string
   doc.setIn(['mcp_servers', serverName(root)], { command: 'node', args: [paths.server], env: { ORCH_ROOT: root } });
   const ext = (doc.getIn(['skills', 'external_dirs']) as { toJSON?: () => string[] } | undefined)?.toJSON?.() ?? [];
   const skillsDir = join(root, '.agents/skills');
-  if (!ext.includes(skillsDir)) doc.setIn(['skills', 'external_dirs'], [...ext, skillsDir]);
+  const orchSkillsDir = join(skillsDir, 'orch');
+  const merged = [...ext];
+  for (const d of [skillsDir, orchSkillsDir]) if (!merged.includes(d)) merged.push(d);
+  doc.setIn(['skills', 'external_dirs'], merged);
   writeFile(cfg, String(doc), dry);
   actions.push({ path: cfg, action: `MCP server "${serverName(root)}" and skills directory` });
   return actions;

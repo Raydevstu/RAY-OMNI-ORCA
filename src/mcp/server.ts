@@ -12,8 +12,11 @@ import { Memory } from '../core/memory.js';
 import { explainChanges, verify } from '../core/verifier.js';
 import { createCheckpoint, rollback } from '../core/checkpoint.js';
 import { loadTasks, getTask } from '../core/tasks.js';
-import { start_task, request_confirmation, decide_confirmation } from './handlers.js';
+import { start_task, request_confirmation, decide_confirmation, begin_execution } from './handlers.js';
 import { getConfirmation } from '../core/confirmations.js';
+import { classify } from '../core/gates.js';
+import { changedFiles } from '../core/git.js';
+import { shouldProcessPath } from '../core/config.js';
 
 
 export function buildServer(root: string): McpServer {
@@ -23,7 +26,7 @@ export function buildServer(root: string): McpServer {
     rec.record('tool', { tool, args });
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   };
-  const skills = () => loadSkills([join(root, '.agents/skills'), bundledSkills]);
+  const skills = () => loadSkills([join(root, '.agents/skills'), join(root, '.agents/skills/orch'), bundledSkills]);
 
   server.registerTool('get_project_context', { description: 'Project map (stack, scripts, folders) and approved memory relevant to a query.',
     inputSchema: { query: z.string().optional() } }, async ({ query }) => {
@@ -65,11 +68,58 @@ export function buildServer(root: string): McpServer {
       return reply('decide_confirmation', { fingerprint }, out);
     });
 
-  server.registerTool('verify_changes', { description: 'Run project checks, secret scan and dependency check on the current changes.',
-    inputSchema: { network: z.boolean().optional() } }, async ({ network }) => {
+  server.registerTool('begin_execution', { description: 'Verify approval for a concrete action, create a rollback checkpoint, mark executing. Action must exactly match the approved request_confirmation action (for edits: {file, bytes}).',
+    inputSchema: { taskId: z.string(), action: z.unknown() } }, async ({ taskId, action }) => {
+      const out = await begin_execution(root, { taskId, action });
+      return reply('begin_execution', { taskId }, out);
+    });
+
+  server.registerTool('apply_edit', { description: 'Write a file through the gate. For gated paths, request_confirmation must have approved action {file, bytes} with the same byte length.',
+    inputSchema: { taskId: z.string(), file: z.string(), content: z.string() } }, async ({ taskId, file, content }) => {
+      const { resolve, join, relative, sep } = await import('node:path');
+      const { mkdirSync, writeFileSync } = await import('node:fs');
+      const { requireApproval } = await import('../core/confirmations.js');
+      const abs = resolve(root, file);
+      const rel = relative(root, abs);
+      if (rel.startsWith('..') || abs === root) return reply('apply_edit', { taskId, file }, { ok: false, note: 'Path escapes project root.' });
+      const norm = rel.split(sep).join('/');
+      if (!shouldProcessPath(root, norm)) return reply('apply_edit', { taskId, file }, { ok: false, note: `Path is excluded by config: ${norm}` });
+      const seen = new Map<string, string>();
+      for (const r of classify({ text: `${norm}\n${content.slice(0, 2000)}`, paths: [norm] }).reasons) seen.set(r.gate, r.why);
+      const gates = [...seen].map(([gate, why]) => ({ gate, why }));
+      const action = { file: norm, bytes: content.length };
+      if (gates.length) {
+        try { requireApproval(root, taskId, action, 'action'); }
+        catch { return reply('apply_edit', { taskId, file }, { ok: false, gate_hit: true, gates: gates.map(g => g.gate), note: 'Gated path without approval. Call request_confirmation then begin_execution first.' }); }
+      }
+      mkdirSync(join(root, norm.split('/').slice(0, -1).join('/')), { recursive: true });
+      writeFileSync(abs, content);
+      new Recorder(root).record('edit_applied', { taskId, file: norm, gates: gates.map(g => g.gate) });
+      return reply('apply_edit', { taskId, file }, { ok: true, file: norm });
+    });
+
+  server.registerTool('verify_changes', { description: 'Run project checks, secret scan and dependency check on the current changes. Fail-closed: gated files changed without an approved action are reported.',
+    inputSchema: { network: z.boolean().optional(), taskId: z.string().optional() } }, async ({ network, taskId }) => {
       const report = await verify(root, loadProjectMap(root), { network });
+      if (taskId) {
+        const { openStore } = await import('../core/store.js');
+        const changed = changedFiles(root).changed.filter(f => shouldProcessPath(root, f));
+        const unapproved: string[] = [];
+        for (const f of changed) {
+          if (!classify({ paths: [f] }).reasons.length) continue;
+          try {
+            const rows = openStore(root).prepare("SELECT gates FROM confirmations WHERE taskId=? AND status='approved'").all(taskId) as unknown as Array<{ gates: string }>;
+            const covered = rows.some(r => { try { const g = JSON.parse(r.gates); return g?.action?.file === f; } catch { return false; } });
+            if (!covered) unapproved.push(f);
+          } catch { unapproved.push(f); }
+        }
+        if (unapproved.length) {
+          report.ok = false;
+          report.findings.push({ severity: 'high', kind: 'gate', detail: `Gated files changed without an approved action: ${unapproved.join(', ')}. Rollback recommended.` });
+        }
+      }
       rec.record('verify', { ok: report.ok, checks: report.checks.map(c => `${c.name}:${c.status}`), findings: report.findings.length });
-      return reply('verify_changes', { network }, report);
+      return reply('verify_changes', { network, taskId }, report);
     });
 
   server.registerTool('explain_changes', { description: 'Plain-language summary of what changed and what needs review.', inputSchema: {} },

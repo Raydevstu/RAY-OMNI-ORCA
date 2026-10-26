@@ -41,3 +41,8 @@ export function isExcluded(relPath: string, cfg: OrchConfig): boolean {
   }
   return false;
 }
+
+/** Single shared gate: false means skip this path everywhere (index, verify, record, skills). */
+export function shouldProcessPath(root: string, p: string): boolean {
+  return !isExcluded(p.replace(/\\/g, '/'), loadConfig(root));
+}

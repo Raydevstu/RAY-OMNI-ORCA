@@ -47,7 +47,7 @@ async function main(): Promise<void> {
       checks.push([existsSync(join(orchDir(root), 'project-map.json')), 'project indexed (.orch/project-map.json)']);
       checks.push([existsSync(join(root, '.git')), 'git repository (needed for checkpoints)']);
       checks.push([read(join(root, 'AGENTS.md')).includes(AGENTS_BEGIN), 'AGENTS.md contains orch rules']);
-      checks.push([existsSync(join(root, '.agents/skills/secure-coding/SKILL.md')), 'skills installed in .agents/skills']);
+      checks.push([existsSync(join(root, '.agents/skills/orch/secure-coding/SKILL.md')), 'skills installed in .agents/skills/orch']);
       checks.push([read(join(root, '.codex/config.toml')).includes(TOML_BEGIN), 'Codex MCP config written']);
       checks.push([read(join(root, '.codex/hooks.json')).includes(' hook '), 'Codex hooks written']);
       const hh = hermesHome(flag('hermes-home'));

@@ -10,10 +10,10 @@ export const SECRET_PATTERNS: { name: string; re: RegExp }[] = [
   { name: 'bearer', re: /\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/g },
 ];
 const ASSIGNMENT =
-  /\b((?:api[_-]?key|secret|token|password|passwd|private[_-]?key)[A-Za-z0-9_]*["']?\s*[:=]\s*)(["']?)([^\s"',;]{8,})/gi;
+  /\b((?:api[_-]?key|secret|token|password|passwd|private[_-]?key|database[_-]?url|db[_-]?url|authorization|cookie|credential|session[_-]?(?:id|token)?)[A-Za-z0-9_]*["']?\s*[:=]\s*)(["']?)([^\s"',;]{4,})/gi;
 
 const SENSITIVE_KEYS =
-  /(token|password|passwd|secret|apikey|api[_-]?key|authorization|cookie|databaseurl|db[_-]?url|privatekey|accesskey|auth|credential)/i;
+  /(token|password|passwd|secret|apikey|api[_-]?key|authorization|cookie|databaseurl|db[_-]?url|privatekey|accesskey|auth|credential|session)/i;
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.orch', 'coverage', '.next']);
 
@@ -86,6 +86,9 @@ function redactString(text: string, extra: string[] = []): string {
     re.lastIndex = 0;
     out = out.replace(re, `[REDACTED:${name}]`);
   }
+  out = out
+    .replace(/\bpostgres(?:ql)?:\/\/[^\s"']+/gi, '[REDACTED:database-url]')
+    .replace(/\bCookie:\s*[^\n;]+/gi, 'Cookie: [REDACTED:field]');
   return out.replace(ASSIGNMENT, '$1$2[REDACTED:assignment]');
 }
 
@@ -93,7 +96,7 @@ export function redact(text: string, extra: string[] = []): string {
   return redactString(text, extra);
 }
 
-/** Redact BEFORE JSON.stringify. Redacts sensitive keys regardless of value. */
+/** Redact BEFORE JSON.stringify. Sensitive-key values are replaced wholesale. */
 export function redactDeep<T>(value: T, secrets: string[] = []): T {
   if (typeof value === 'string') return redactString(value, secrets) as unknown as T;
   if (Array.isArray(value)) return value.map((v) => redactDeep(v, secrets)) as unknown as T;
@@ -101,11 +104,10 @@ export function redactDeep<T>(value: T, secrets: string[] = []): T {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
       if (SENSITIVE_KEYS.test(k)) {
-        if (v && typeof v === 'object') out[k] = redactDeep(v, secrets);
-        else out[k] = '[REDACTED:field]';
-      } else {
-        out[k] = redactDeep(v as unknown, secrets);
+        out[k] = '[REDACTED:field]';
+        continue;
       }
+      out[k] = redactDeep(v as unknown, secrets);
     }
     return out as T;
   }
