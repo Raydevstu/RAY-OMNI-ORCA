@@ -108,8 +108,16 @@ async function main(): Promise<void> {
       console.log(JSON.stringify(prune(root)));
       break;
     }
+    case 'dashboard': {
+      const { startDashboard } = await import('./dashboard/server.js');
+      const port = Number(flag('port') ?? 7687) || 7687;
+      const { url } = await startDashboard(root, port);
+      console.log(`orch dashboard for ${root}\n${url}`);
+      await new Promise(() => {}); // serve until Ctrl-C
+      break;
+    }
     default:
-      console.log('orch <init|doctor|status|memory|mcp|config|prune> [--root DIR] [--platform codex|hermes|all] [--dry-run] [--hermes-home DIR]');
+      console.log('orch <init|doctor|status|memory|mcp|config|prune|dashboard> [--root DIR] [--platform codex|hermes|all] [--dry-run] [--hermes-home DIR] [--port N]');
   }
 }
 main().catch(e => { console.error(String(e?.message ?? e)); process.exit(1); });

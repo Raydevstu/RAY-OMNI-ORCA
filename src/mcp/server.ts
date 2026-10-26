@@ -127,6 +127,18 @@ export function buildServer(root: string): McpServer {
         }
       }
       rec.record('verify', { ok: report.ok, checks: report.checks.map(c => `${c.name}:${c.status}`), findings: report.findings.length });
+      // Persist a trimmed run for the dashboard (best-effort; never fails verification).
+      try {
+        const { openStore } = await import('../core/store.js');
+        const { randomUUID } = await import('node:crypto');
+        openStore(root).prepare('INSERT OR REPLACE INTO verification_runs(id,taskId,result,createdAt) VALUES(?,?,?,?)')
+          .run(randomUUID(), taskId ?? null, JSON.stringify({
+            ok: report.ok,
+            checks: report.checks.map(c => ({ name: c.name, status: c.status })),
+            findings: report.findings.map(f => ({ severity: f.severity, kind: f.kind, detail: String(f.detail).slice(0, 300) })),
+            changed: report.changed ?? [],
+          }), new Date().toISOString());
+      } catch { /* dashboard persistence is optional */ }
       return reply('verify_changes', { network, taskId }, report);
     });
 
