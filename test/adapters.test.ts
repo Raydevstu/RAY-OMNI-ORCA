@@ -44,14 +44,16 @@ test('MCP server end to end: lists tools, compiles tasks, blocks risky actions',
   // Gated flow: start identifies gates only; each concrete action needs its own approval + begin_execution.
   const gated = await call('start_task', { prompt: 'drop table users and reset auth tokens, must preserve logins' });
   assert.equal(gated.status, 'needs_approval'); assert.ok(gated.gates.length);
-  const action = { file: 'src/auth/login.ts', bytes: 16 };
+  const content = '// approved edit';
+  const action = { file: 'src/auth/login.ts', content };
   const conf = await call('request_confirmation', { taskId: gated.taskId, action });
   assert.ok(conf.fingerprint); assert.equal(conf.status, 'pending');
+  assert.ok(conf.contentSha256); assert.ok(conf.preview !== undefined);
   const decided = await call('decide_confirmation', { fingerprint: conf.fingerprint, approve: true });
   assert.equal(decided.status, 'approved');
   const begun = await call('begin_execution', { taskId: gated.taskId, action });
   assert.equal(begun.status, 'executing'); assert.equal(begun.checkpoint.ok, true);
-  const applied = await call('apply_edit', { taskId: gated.taskId, file: 'src/auth/login.ts', content: '// approved edit' });
+  const applied = await call('apply_edit', { taskId: gated.taskId, file: 'src/auth/login.ts', content });
   assert.equal(applied.ok, true);
   await client.close();
 });

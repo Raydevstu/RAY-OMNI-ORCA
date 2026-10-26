@@ -68,50 +68,57 @@ export function buildServer(root: string): McpServer {
       return reply('decide_confirmation', { fingerprint }, out);
     });
 
-  server.registerTool('begin_execution', { description: 'Verify approval for a concrete action, create a rollback checkpoint, mark executing. Action must exactly match the approved request_confirmation action (for edits: {file, bytes}).',
+  server.registerTool('begin_execution', { description: 'Verify approval for a concrete action, create a rollback checkpoint, bind execution. Action must be the exact {file, content} approved in request_confirmation.',
     inputSchema: { taskId: z.string(), action: z.unknown() } }, async ({ taskId, action }) => {
       const out = await begin_execution(root, { taskId, action });
       return reply('begin_execution', { taskId }, out);
     });
 
-  server.registerTool('apply_edit', { description: 'Write a file through the gate. For gated paths, request_confirmation must have approved action {file, bytes} with the same byte length.',
+  server.registerTool('apply_edit', { description: 'Write a file through the gate. For gated paths, approval must cover the exact content: request_confirmation with {file, content}, then begin_execution with the same {file, content}.',
     inputSchema: { taskId: z.string(), file: z.string(), content: z.string() } }, async ({ taskId, file, content }) => {
-      const { resolve, join, relative, sep } = await import('node:path');
+      const { join } = await import('node:path');
       const { mkdirSync, writeFileSync } = await import('node:fs');
-      const { requireApproval } = await import('../core/confirmations.js');
-      const abs = resolve(root, file);
-      const rel = relative(root, abs);
-      if (rel.startsWith('..') || abs === root) return reply('apply_edit', { taskId, file }, { ok: false, note: 'Path escapes project root.' });
-      const norm = rel.split(sep).join('/');
+      const { normalizeAction } = await import('../core/confirmations.js');
+      const { jailPath } = await import('../core/paths.js');
+      const { requireExecution } = await import('./handlers.js');
+      let norm: string;
+      try { norm = jailPath(root, file); }
+      catch (e) { return reply('apply_edit', { taskId, file }, { ok: false, note: (e as Error).message }); }
+      const abs = join(root, norm);
       if (!shouldProcessPath(root, norm)) return reply('apply_edit', { taskId, file }, { ok: false, note: `Path is excluded by config: ${norm}` });
       const seen = new Map<string, string>();
       for (const r of classify({ text: `${norm}\n${content.slice(0, 2000)}`, paths: [norm] }).reasons) seen.set(r.gate, r.why);
       const gates = [...seen].map(([gate, why]) => ({ gate, why }));
-      const action = { file: norm, bytes: content.length };
+      const action = normalizeAction({ file: norm, content });
       if (gates.length) {
-        try { requireApproval(root, taskId, action, 'action'); }
-        catch { return reply('apply_edit', { taskId, file }, { ok: false, gate_hit: true, gates: gates.map(g => g.gate), note: 'Gated path without approval. Call request_confirmation then begin_execution first.' }); }
+        try { requireExecution(root, taskId, action); }
+        catch { return reply('apply_edit', { taskId, file }, { ok: false, gate_hit: true, gates: gates.map(g => g.gate), note: 'Gated path without a bound begin_execution for this exact content. Call request_confirmation then begin_execution first.' }); }
       }
       mkdirSync(join(root, norm.split('/').slice(0, -1).join('/')), { recursive: true });
       writeFileSync(abs, content);
-      new Recorder(root).record('edit_applied', { taskId, file: norm, gates: gates.map(g => g.gate) });
-      return reply('apply_edit', { taskId, file }, { ok: true, file: norm });
+      new Recorder(root).record('edit_applied', { taskId, file: norm, contentSha256: action.contentSha256, gates: gates.map(g => g.gate) });
+      return reply('apply_edit', { taskId, file }, { ok: true, file: norm, contentSha256: action.contentSha256 });
     });
 
   server.registerTool('verify_changes', { description: 'Run project checks, secret scan and dependency check on the current changes. Fail-closed: gated files changed without an approved action are reported.',
     inputSchema: { network: z.boolean().optional(), taskId: z.string().optional() } }, async ({ network, taskId }) => {
       const report = await verify(root, loadProjectMap(root), { network });
       if (taskId) {
-        const { openStore } = await import('../core/store.js');
+        const { approvedActions, sha256 } = await import('../core/confirmations.js');
+        const { readFileSync, existsSync } = await import('node:fs');
+        const { join: joinP } = await import('node:path');
         const changed = changedFiles(root).changed.filter(f => shouldProcessPath(root, f));
+        const approved = approvedActions(root, taskId);
         const unapproved: string[] = [];
         for (const f of changed) {
           if (!classify({ paths: [f] }).reasons.length) continue;
+          // Covered only when an approved action binds this file AND its digest matches current content.
+          let covered = false;
           try {
-            const rows = openStore(root).prepare("SELECT gates FROM confirmations WHERE taskId=? AND status='approved'").all(taskId) as unknown as Array<{ gates: string }>;
-            const covered = rows.some(r => { try { const g = JSON.parse(r.gates); return g?.action?.file === f; } catch { return false; } });
-            if (!covered) unapproved.push(f);
-          } catch { unapproved.push(f); }
+            const disk = existsSync(joinP(root, f)) ? sha256(readFileSync(joinP(root, f), 'utf8')) : null;
+            covered = !!disk && approved.some(a => a.file === f && a.contentSha256 === disk);
+          } catch { covered = false; }
+          if (!covered) unapproved.push(f);
         }
         if (unapproved.length) {
           report.ok = false;

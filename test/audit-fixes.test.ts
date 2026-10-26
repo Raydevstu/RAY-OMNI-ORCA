@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, symlinkSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fixture } from './helpers.js';
 import { saveTask } from '../src/core/tasks.js';
@@ -11,8 +11,9 @@ import { installCodex } from '../src/adapters/codex.js';
 import { parseSkill } from '../src/core/router.js';
 import { Recorder } from '../src/core/recorder.js';
 import { readdirSync } from 'node:fs';
-import { start_task, request_confirmation, decide_confirmation, begin_execution, execute_gated_action } from '../src/mcp/handlers.js';
+import { start_task, request_confirmation, decide_confirmation, begin_execution, execute_gated_action, requireExecution } from '../src/mcp/handlers.js';
 import { createPending } from '../src/core/confirmations.js';
+import { jailPath } from '../src/core/paths.js';
 
 test('tasks never persist env values or nested secrets', () => {
   const root = fixture({ git: false });
@@ -50,12 +51,17 @@ test('gated flow: plan approval does not approve actions; begin_execution create
   const root = fixture();
   const r = await start_task(root, { prompt: 'delete all migrations and reset auth tokens in src/auth/login.ts, must preserve logins' }) as { status: string; taskId: string };
   assert.equal(r.status, 'needs_approval');
+  // No dangling plan confirmation is created (item 5).
+  const { openStore } = await import('../src/core/store.js');
+  const plans = openStore(root).prepare("SELECT COUNT(*) as c FROM confirmations WHERE taskId=?").get(r.taskId) as unknown as { c: number };
+  assert.equal(plans.c, 0);
   // Plan-level approval must NOT unlock action execution.
-  const action = { file: 'src/auth/login.ts', bytes: 10 };
+  const action = { file: 'src/auth/login.ts', content: 'export const a = 1;' };
   await assert.rejects(() => execute_gated_action(root, r.taskId, action, async () => {}), /GATED/);
   await assert.rejects(() => begin_execution(root, { taskId: r.taskId, action }), /GATED/);
   // Per-action approval, then begin_execution creates rollback protection.
   const conf = await request_confirmation(root, { taskId: r.taskId, action });
+  assert.ok(conf.contentSha256); assert.ok(typeof conf.preview === 'string');
   await decide_confirmation(root, { fingerprint: conf.fingerprint, approve: true });
   const begun = await begin_execution(root, { taskId: r.taskId, action });
   assert.equal(begun.status, 'executing'); assert.equal(begun.checkpoint.ok, true);
@@ -63,13 +69,15 @@ test('gated flow: plan approval does not approve actions; begin_execution create
   assert.equal(out, 'ok');
 });
 
-test('denied confirmation stays denied (no silent re-pending)', async () => {
+test('denied confirmation is terminal: deny then approve is rejected', async () => {
   const root = fixture({ git: false });
   const r = await start_task(root, { prompt: 'drop table users, must preserve logins for admins' }) as { status: string; taskId: string };
-  const action = { file: 'migrations/001.sql', bytes: 5 };
+  const action = { file: 'migrations/001.sql', content: 'drop table users;' };
   const conf = await request_confirmation(root, { taskId: r.taskId, action });
   await decide_confirmation(root, { fingerprint: conf.fingerprint, approve: false });
-  assert.throws(() => createPending(root, r.taskId, action, ['migration'], 'action'), /denied/);
+  await assert.rejects(() => decide_confirmation(root, { fingerprint: conf.fingerprint, approve: true }), /terminal/);
+  const { normalizeAction } = await import('../src/core/confirmations.js');
+  assert.throws(() => createPending(root, r.taskId, normalizeAction(action), ['migration'], 'action'), /denied/);
   await assert.rejects(() => execute_gated_action(root, r.taskId, action, async () => {}), /GATED/);
 });
 
@@ -148,4 +156,72 @@ test('codex init backs up malformed hooks.json instead of crashing silently', ()
   writeFileSync(join(root, '.codex/hooks.json'), '{ not json');
   assert.throws(() => installCodex(root, false), /backed up/);
   assert.ok(existsSync(join(root, '.codex/hooks.json')));
+});
+
+test('apply path requires bound begin_execution for the exact action', async () => {
+  const root = fixture({ git: false });
+  const r = await start_task(root, { prompt: 'drop table users, must preserve logins for admins' }) as { status: string; taskId: string };
+  const action = { file: 'migrations/001.sql', content: 'drop table users;' };
+  const conf = await request_confirmation(root, { taskId: r.taskId, action });
+  await decide_confirmation(root, { fingerprint: conf.fingerprint, approve: true });
+  // Approved but begin_execution never ran: execution is not bound.
+  assert.throws(() => requireExecution(root, r.taskId, action), /begin_execution/);
+  await begin_execution(root, { taskId: r.taskId, action });
+  requireExecution(root, r.taskId, action); // no throw
+});
+
+test('same-length different content is NOT the approved action', async () => {
+  const root = fixture({ git: false });
+  const r = await start_task(root, { prompt: 'drop table users, must preserve logins for admins' }) as { status: string; taskId: string };
+  const good = { file: 'migrations/001.sql', content: 'aaaa' };
+  const evil = { file: 'migrations/001.sql', content: 'bbbb' }; // same length, different digest
+  const conf = await request_confirmation(root, { taskId: r.taskId, action: good });
+  await decide_confirmation(root, { fingerprint: conf.fingerprint, approve: true });
+  await begin_execution(root, { taskId: r.taskId, action: good });
+  assert.throws(() => requireExecution(root, r.taskId, evil), /begin_execution/);
+  await assert.rejects(() => execute_gated_action(root, r.taskId, evil, async () => {}), /GATED/);
+});
+
+test('symlink inside the repo cannot jail-break writes', () => {
+  const root = fixture({ git: false });
+  const outside = join(root, '..', `orch-outside-${Date.now()}`);
+  mkdirSync(outside, { recursive: true });
+  const link = join(root, 'linkdir');
+  try {
+    symlinkSync(outside, link, 'junction');
+  } catch {
+    return; // no symlink privilege on this machine: skip
+  }
+  assert.throws(() => jailPath(root, 'linkdir/evil.txt'), /symlink|outside/i);
+  assert.throws(() => jailPath(root, '../escape.txt'), /escapes/i);
+  assert.equal(jailPath(root, 'src/ok.txt'), 'src/ok.txt');
+  rmSync(outside, { recursive: true, force: true });
+});
+
+test('verifier covers only digest-matching approved content', async () => {
+  const { verify } = await import('../src/core/verifier.js');
+  const { indexProject } = await import('../src/core/indexer.js');
+  const { approvedActions } = await import('../src/core/confirmations.js');
+  const root = fixture({ scripts: {} });
+  const map = indexProject(root);
+  const r = await start_task(root, { prompt: 'reset auth tokens in src/auth/login.ts, must preserve logins' }) as { status: string; taskId: string };
+  const content = '// rotated tokens';
+  const action = { file: 'src/auth/login.ts', content };
+  const conf = await request_confirmation(root, { taskId: r.taskId, action });
+  await decide_confirmation(root, { fingerprint: conf.fingerprint, approve: true });
+  await begin_execution(root, { taskId: r.taskId, action });
+  mkdirSync(join(root, 'src/auth'), { recursive: true });
+  writeFileSync(join(root, 'src/auth/login.ts'), content);
+  const { execSync } = await import('node:child_process');
+  execSync('git add -A && git commit -qm approved-edit', { cwd: root });
+  // Tamper after approval: same file, different content.
+  writeFileSync(join(root, 'src/auth/login.ts'), '// rotated tokens + backdoor');
+  const diallowed = approvedActions(root, r.taskId);
+  assert.ok(diallowed.some(a => a.file === 'src/auth/login.ts'));
+  const { readFileSync: rf } = await import('node:fs');
+  const { sha256 } = await import('../src/core/confirmations.js');
+  const onDisk = sha256(rf(join(root, 'src/auth/login.ts'), 'utf8'));
+  assert.ok(!diallowed.some(a => a.file === 'src/auth/login.ts' && a.contentSha256 === onDisk));
+  const rep = await verify(root, map, { network: false });
+  void rep;
 });

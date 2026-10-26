@@ -21,6 +21,11 @@ export function openStore(root: string): DatabaseSync {
   if (hit) return hit;
   const db = new DatabaseSync(join(ensureDir(orchDir(root)), 'orch.db'));
   db.exec(SCHEMA);
+  // Column added after v1: execution binding (approved-action fingerprint per task).
+  try {
+    const cols = db.prepare('PRAGMA table_info(tasks)').all() as unknown as Array<{ name: string }>;
+    if (!cols.some(c => c.name === 'execution')) db.exec('ALTER TABLE tasks ADD COLUMN execution TEXT');
+  } catch { /* best-effort */ }
   migrateOnce(root, db);
   cache.set(root, db);
   return db;

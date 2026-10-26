@@ -71,7 +71,7 @@ export async function verify(root: string, map: ProjectMap, opts: { network?: bo
   const network = opts.network ?? cfg.networkDependencyAudit; // default false: local-first
   const all = changedFiles(root);
   const changed = all.changed.filter(f => shouldProcessPath(root, f));
-  const deleted = all.deleted;
+  const deleted = all.deleted.filter(f => shouldProcessPath(root, f));
   const checks = runCommands(root, map);
   const findings = scanChangedFiles(root, changed);
   const added = addedDependencies(root);
