@@ -1,0 +1,26 @@
+{
+  "name": "orch",
+  "version": "0.1.0",
+  "description": "Local-first orchestration layer for AI coding agents: compile tasks, inject skills, verify output, record safely.",
+  "type": "module",
+  "bin": {
+    "orch": "dist/src/cli.js"
+  },
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "tsc && node --test --disable-warning=ExperimentalWarning dist/test/*.test.js",
+    "orch": "node --disable-warning=ExperimentalWarning dist/src/cli.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "yaml": "^2.5.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2"
+  }
+}
