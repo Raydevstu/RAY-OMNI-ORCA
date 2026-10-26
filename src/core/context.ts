@@ -57,7 +57,7 @@ export function buildInjection(root: string, prompt: string, opts: { maxTokens?:
     if (add(`Skill: ${s.name} (matched: ${p.reasons.join(', ')})\n${s.body.trim()}`, true)) used_skills.push(s.name); else if (used >= budget) { used_skills.push(s.name); break; }
   }
 
-  if (existsSync(join(orchDir(root), 'memory.db'))) {
+  if (existsSync(join(orchDir(root), 'orch.db')) || existsSync(join(orchDir(root), 'memory.db'))) {
     const m = new Memory(root); const mem = m.search(prompt, Math.max(0, Math.min(400, budget - used))); m.close();
     if (mem.length) add('Approved project rules:\n' + mem.map(i => `- ${i.text}`).join('\n'));
   }

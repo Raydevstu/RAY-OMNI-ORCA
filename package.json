@@ -1,17 +1,25 @@
 {
   "name": "orch",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Local-first orchestration layer for AI coding agents: compile tasks, inject skills, verify output, record safely.",
   "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Raydevstu/RAY-OMNI-ORCA.git"
+  },
+  "files": ["dist", "skills", "README.md", "LICENSE"],
   "bin": {
     "orch": "dist/src/cli.js"
   },
   "engines": {
-    "node": ">=22.5"
+    "node": ">=22.5.0"
   },
   "scripts": {
-    "build": "tsc",
-    "test": "tsc && node --test --disable-warning=ExperimentalWarning dist/test/*.test.js",
+    "build": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.json && node --test dist/test/*.test.js",
+    "lint": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
     "orch": "node --disable-warning=ExperimentalWarning dist/src/cli.js"
   },
   "dependencies": {

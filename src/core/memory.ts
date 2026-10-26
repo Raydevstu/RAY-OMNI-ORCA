@@ -1,32 +1,29 @@
-import { DatabaseSync } from 'node:sqlite';
-import { join } from 'node:path';
-import { ensureDir, orchDir } from './paths.js';
-import { envValues, redact } from './redact.js';
+import { openStore } from './store.js';
+import { envValues, redactDeep } from './redact.js';
 
 export interface MemoryItem { id: number; kind: string; text: string; source: string; status: string; created_at: string }
 
 export class Memory {
-  private db: DatabaseSync;
   private secrets: string[];
-  constructor(root: string) {
+  constructor(private root: string) {
     this.secrets = envValues(root);
-    this.db = new DatabaseSync(join(ensureDir(orchDir(root)), 'memory.db'));
-    this.db.exec(`CREATE TABLE IF NOT EXISTS memory_items (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, text TEXT NOT NULL, source TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'proposed', created_at TEXT NOT NULL)`);
+    openStore(root);
   }
   /** New entries start as proposed: nothing becomes a trusted rule until a person approves it. */
   propose(text: string, kind = 'rule', source = 'agent'): number {
-    const r = this.db.prepare('INSERT INTO memory_items (kind, text, source, status, created_at) VALUES (?,?,?,?,?)')
-      .run(kind, redact(text, this.secrets), source, 'proposed', new Date().toISOString());
+    const safe = redactDeep(text, this.secrets) as string;
+    const r = openStore(this.root).prepare(
+      'INSERT INTO memory_items (kind, text, source, status, created_at) VALUES (?,?,?,?,?)'
+    ).run(kind, safe, source, 'proposed', new Date().toISOString());
     return Number(r.lastInsertRowid);
   }
   setStatus(id: number, status: 'approved' | 'rejected'): void {
-    this.db.prepare('UPDATE memory_items SET status = ? WHERE id = ?').run(status, id);
+    openStore(this.root).prepare('UPDATE memory_items SET status = ? WHERE id = ?').run(status, id);
   }
   list(status?: string): MemoryItem[] {
-    const rows = status ? this.db.prepare('SELECT * FROM memory_items WHERE status = ? ORDER BY id').all(status)
-      : this.db.prepare('SELECT * FROM memory_items ORDER BY id').all();
+    const db = openStore(this.root);
+    const rows = status ? db.prepare('SELECT * FROM memory_items WHERE status = ? ORDER BY id').all(status)
+      : db.prepare('SELECT * FROM memory_items ORDER BY id').all();
     return rows as unknown as MemoryItem[];
   }
   /** Keyword-ranked search over approved items, capped by an approximate token budget. */
@@ -38,5 +35,5 @@ export class Memory {
     for (const { i } of scored) { const cost = Math.ceil(i.text.length / 4); if (used + cost > tokenBudget) break; used += cost; out.push(i); }
     return out;
   }
-  close(): void { this.db.close(); }
+  close(): void { /* shared store via openStore/closeStore */ }
 }

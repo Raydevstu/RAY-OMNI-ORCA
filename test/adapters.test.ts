@@ -35,12 +35,17 @@ test('MCP server end to end: lists tools, compiles tasks, blocks risky actions',
   const client = new Client({ name: 't', version: '1' });
   await client.connect(new StdioClientTransport({ command: 'node', args: [paths.server], env: { ...process.env, ORCH_ROOT: root } as Record<string, string> }));
   const tools = (await client.listTools()).tools.map(t => t.name);
-  for (const n of ['compile_task', 'start_task', 'select_skills', 'request_confirmation', 'verify_changes']) assert.ok(tools.includes(n), n);
+  for (const n of ['compile_task', 'start_task', 'select_skills', 'request_confirmation', 'decide_confirmation', 'verify_changes']) assert.ok(tools.includes(n), n);
   const call = async (name: string, args: Record<string, unknown>) =>
     JSON.parse(((await client.callTool({ name, arguments: args })).content as { text: string }[])[0].text);
   assert.equal((await call('compile_task', { prompt: 'make it better' })).status, 'needs_clarification');
-  assert.equal((await call('request_confirmation', { action: 'drop table users' })).requiresUserConfirmation, true);
   const started = await call('start_task', { prompt: 'Add a footer component in src/Footer.tsx that shows the year when rendered' });
   assert.equal(started.started, true); assert.equal(started.checkpoint.ok, true);
+  const gated = await call('start_task', { prompt: 'drop table users and reset auth tokens, must preserve logins' });
+  assert.equal(gated.status, 'needs_approval'); assert.ok(gated.fingerprint);
+  const conf = await call('request_confirmation', { taskId: gated.taskId, action: { file: 'src/x.ts' } });
+  assert.ok(conf.fingerprint); assert.equal(conf.status, 'pending');
+  const decided = await call('decide_confirmation', { fingerprint: conf.fingerprint, approve: true });
+  assert.equal(decided.status, 'approved');
   await client.close();
 });

@@ -7,12 +7,13 @@ import { bundledSkills, rootFromEnv } from '../core/paths.js';
 import { indexProject, loadProjectMap } from '../core/indexer.js';
 import { compileTask } from '../core/compiler.js';
 import { loadSkills, selectSkills } from '../core/router.js';
-import { classify } from '../core/gates.js';
 import { Recorder } from '../core/recorder.js';
 import { Memory } from '../core/memory.js';
 import { explainChanges, verify } from '../core/verifier.js';
 import { createCheckpoint, rollback } from '../core/checkpoint.js';
-import { loadTasks, saveTask } from '../core/tasks.js';
+import { loadTasks, getTask } from '../core/tasks.js';
+import { start_task, request_confirmation, decide_confirmation } from './handlers.js';
+import { getConfirmation } from '../core/confirmations.js';
 
 
 export function buildServer(root: string): McpServer {
@@ -35,12 +36,14 @@ export function buildServer(root: string): McpServer {
     inputSchema: { prompt: z.string() } }, async ({ prompt }) =>
       reply('compile_task', { prompt }, compileTask(prompt, loadProjectMap(root))));
 
-  server.registerTool('start_task', { description: 'Register a compiled task and create a rollback checkpoint.',
+  server.registerTool('start_task', { description: 'Compile prompt, detect gates, create pending approval if needed. Returns needs_clarification, needs_approval, or executable.',
     inputSchema: { prompt: z.string() } }, async ({ prompt }) => {
-      const spec = compileTask(prompt, loadProjectMap(root));
-      if (spec.status === 'needs_clarification') return reply('start_task', { prompt }, { started: false, questions: spec.questions });
-      const task = saveTask(root, prompt, spec);
-      return reply('start_task', { prompt }, { started: true, task, checkpoint: createCheckpoint(root, task.id) });
+      const out = await start_task(root, { prompt });
+      if (out.status === 'executable') {
+        const task = getTask(root, out.taskId);
+        if (task) return reply('start_task', { prompt }, { started: true, task, checkpoint: createCheckpoint(root, task.id) });
+      }
+      return reply('start_task', { prompt }, out);
     });
 
   server.registerTool('select_skills', { description: 'Pick up to 3 relevant skills for a task, with reasons. Returns only the selected skills.',
@@ -49,11 +52,17 @@ export function buildServer(root: string): McpServer {
       return reply('select_skills', { text }, picked.map(p => ({ ...p, instructions: all.find(s => s.name === p.name)?.body.trim() })));
     });
 
-  server.registerTool('request_confirmation', { description: 'Check whether an action needs the user to confirm. If so, STOP and ask the user before continuing.',
-    inputSchema: { action: z.string(), paths: z.array(z.string()).optional() } }, async ({ action, paths }) => {
-      const g = classify({ text: action, paths });
-      return reply('request_confirmation', { action, paths }, { requiresUserConfirmation: g.confirm, reasons: g.reasons,
-        instruction: g.confirm ? 'Ask the user for explicit approval before doing this. Do not proceed on your own.' : 'No confirmation needed.' });
+  server.registerTool('request_confirmation', { description: 'Create a pending confirmation for a gated action. STOP and wait for decide_confirmation approval.',
+    inputSchema: { taskId: z.string(), action: z.unknown(), gates: z.array(z.string()).optional() } }, async ({ taskId, action, gates }) => {
+      const out = await request_confirmation(root, { taskId, action, gates: gates as string[] | undefined });
+      return reply('request_confirmation', { taskId }, { ...out, requiresUserConfirmation: true,
+        instruction: 'Show the fingerprint to the user and call decide_confirmation with approve=true. Do not proceed on your own.' });
+    });
+
+  server.registerTool('decide_confirmation', { description: 'Approve or deny a confirmation fingerprint.',
+    inputSchema: { fingerprint: z.string(), approve: z.boolean() } }, async ({ fingerprint, approve }) => {
+      const out = await decide_confirmation(root, { fingerprint, approve });
+      return reply('decide_confirmation', { fingerprint }, out);
     });
 
   server.registerTool('verify_changes', { description: 'Run project checks, secret scan and dependency check on the current changes.',

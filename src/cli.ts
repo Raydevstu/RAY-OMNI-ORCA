@@ -7,6 +7,8 @@ import { Recorder } from './core/recorder.js';
 import { Memory } from './core/memory.js';
 import { loadTasks } from './core/tasks.js';
 import { orchDir } from './core/paths.js';
+import { loadConfig, ConfigSchema, configPath } from './core/config.js';
+import { prune } from './core/prune.js';
 import { installCodex, TOML_BEGIN } from './adapters/codex.js';
 import { hermesHome, hermesPresent, installHermes, serverName } from './adapters/hermes.js';
 import { AGENTS_BEGIN } from './adapters/shared.js';
@@ -61,7 +63,7 @@ async function main(): Promise<void> {
       break;
     }
     case 'status': {
-      const m = existsSync(join(orchDir(root), 'memory.db')) ? new Memory(root) : null;
+      const m = existsSync(join(orchDir(root), 'orch.db')) || existsSync(join(orchDir(root), 'memory.db')) ? new Memory(root) : null;
       console.log(`tasks: ${loadTasks(root).length}`);
       console.log(`memory: ${m?.list('approved').length ?? 0} approved, ${m?.list('proposed').length ?? 0} awaiting review`);
       const dir = join(orchDir(root), 'events');
@@ -95,8 +97,19 @@ async function main(): Promise<void> {
       const { StdioServerTransport } = await import('@modelcontextprotocol/sdk/server/stdio.js');
       await buildServer(root).connect(new StdioServerTransport()); break;
     }
+    case 'config': {
+      const sub = argv[1];
+      if (sub === 'show') console.log(JSON.stringify(loadConfig(root), null, 2));
+      else if (sub === 'validate') { ConfigSchema.parse(JSON.parse(readFileSync(configPath(root), 'utf8'))); console.log('config valid'); }
+      else console.log('orch config <show|validate> [--root DIR]');
+      break;
+    }
+    case 'prune': {
+      console.log(JSON.stringify(prune(root)));
+      break;
+    }
     default:
-      console.log('orch <init|doctor|status|memory|mcp> [--root DIR] [--platform codex|hermes|all] [--dry-run] [--hermes-home DIR]');
+      console.log('orch <init|doctor|status|memory|mcp|config|prune> [--root DIR] [--platform codex|hermes|all] [--dry-run] [--hermes-home DIR]');
   }
 }
 main().catch(e => { console.error(String(e?.message ?? e)); process.exit(1); });
