@@ -198,6 +198,30 @@ test('symlink inside the repo cannot jail-break writes', () => {
   rmSync(outside, { recursive: true, force: true });
 });
 
+test('approval preview reports size and flags truncation', async () => {
+  const root = fixture({ git: false });
+  const r = await start_task(root, { prompt: 'reset auth tokens in src/auth/login.ts, must preserve logins' }) as { status: string; taskId: string };
+  const long = Array.from({ length: 50 }, (_, i) => `// line ${i} — benign filler`).join('\n');
+  const conf = await request_confirmation(root, { taskId: r.taskId, action: { file: 'src/auth/login.ts', content: long } }) as Record<string, unknown>;
+  assert.equal(conf.totalLines, 50);
+  assert.equal(conf.totalBytes, Buffer.byteLength(long, 'utf8'));
+  assert.equal(conf.previewTruncated, true);
+  assert.ok(typeof conf.note === 'string' && (conf.note as string).includes('truncated'));
+  const short = 'export const a = 1;';
+  const conf2 = await request_confirmation(root, { taskId: r.taskId, action: { file: 'src/auth/login.ts', content: short } }) as Record<string, unknown>;
+  assert.equal(conf2.previewTruncated, false);
+  assert.equal(conf2.totalLines, 1);
+});
+
+test('gate detection scans the full edit content, not just the head', async () => {
+  const { detectEditGates } = await import('../src/core/gates.js');
+  const buried = 'x'.repeat(5000) + '\n' + 'drop table users;';
+  const gates = detectEditGates('src/notes.txt', buried);
+  assert.ok(gates.some(g => g.gate === 'delete'), 'destructive statement past char 2000 must trigger a gate');
+  const clean = detectEditGates('src/notes.txt', 'export const greeting = "hello";');
+  assert.equal(clean.length, 0);
+});
+
 test('verifier covers only digest-matching approved content', async () => {
   const { verify } = await import('../src/core/verifier.js');
   const { indexProject } = await import('../src/core/indexer.js');

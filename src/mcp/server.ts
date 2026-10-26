@@ -86,9 +86,10 @@ export function buildServer(root: string): McpServer {
       catch (e) { return reply('apply_edit', { taskId, file }, { ok: false, note: (e as Error).message }); }
       const abs = join(root, norm);
       if (!shouldProcessPath(root, norm)) return reply('apply_edit', { taskId, file }, { ok: false, note: `Path is excluded by config: ${norm}` });
-      const seen = new Map<string, string>();
-      for (const r of classify({ text: `${norm}\n${content.slice(0, 2000)}`, paths: [norm] }).reasons) seen.set(r.gate, r.why);
-      const gates = [...seen].map(([gate, why]) => ({ gate, why }));
+      // Gate detection scans the FULL content via detectEditGates (linear-time
+      // rules), so a risky token late in a long file still triggers its gate.
+      const { detectEditGates } = await import('../core/gates.js');
+      const gates = detectEditGates(norm, content);
       const action = normalizeAction({ file: norm, content });
       if (gates.length) {
         try { requireExecution(root, taskId, action); }

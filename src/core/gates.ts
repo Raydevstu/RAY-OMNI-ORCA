@@ -25,3 +25,11 @@ export function classify(input: { paths?: string[]; text?: string; deletedPaths?
   for (const p of input.deletedPaths ?? []) add('delete', `file removed: ${p}`);
   return { confirm: reasons.length > 0, reasons };
 }
+
+/** Gate detection for a proposed edit. Scans the FULL content (rules are linear-time
+ *  regexes) so a risky token late in a long file still triggers its gate. */
+export function detectEditGates(file: string, content: string): GateResult['reasons'] {
+  const seen = new Map<string, string>();
+  for (const r of classify({ text: `${file}\n${content}`, paths: [file] }).reasons) seen.set(r.gate, r.why);
+  return [...seen].map(([gate, why]) => ({ gate: gate as Gate, why }));
+}

@@ -86,10 +86,18 @@ export function isEditAction(action: unknown): boolean {
   return !!a && typeof a.file === 'string' && (typeof a.content === 'string' || typeof a.contentSha256 === 'string');
 }
 
+export interface ContentPreview { preview: string; totalLines: number; totalBytes: number; truncated: boolean }
+
 /** Redacted human-review preview of proposed content (first lines only, secrets masked). */
-export function previewContent(root: string, content: string, maxLines = 20, maxChars = 1500): string {
-  const head = content.split('\n').slice(0, maxLines).join('\n').slice(0, maxChars);
-  return redact(head, envValues(root));
+export function previewContent(root: string, content: string, maxLines = 20, maxChars = 1500): ContentPreview {
+  const lines = content.split('\n');
+  const head = lines.slice(0, maxLines).join('\n').slice(0, maxChars);
+  return {
+    preview: redact(head, envValues(root)),
+    totalLines: lines.length,
+    totalBytes: Buffer.byteLength(content, 'utf8'),
+    truncated: lines.length > maxLines || head.length < content.length,
+  };
 }
 
 /** Approved edit actions for a task (parsed from stored confirmation rows). */

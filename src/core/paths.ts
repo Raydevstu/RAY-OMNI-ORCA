@@ -13,6 +13,9 @@ export const bundledSkills = join(dirname(fileURLToPath(import.meta.url)), '../.
  * Resolve a repo-relative write target and jail it inside root.
  * Returns the normalized forward-slash path. Throws on `..` escape,
  * symlink components (lstat, no-follow), or a real parent outside root.
+ * Note: check-then-write has the usual local TOCTOU limit against an
+ * adversarial local process swapping paths between check and write;
+ * sufficient for developer-machine use, not for hostile multi-tenant hosts.
  */
 export function jailPath(root: string, file: string): string {
   const abs = resolve(root, file);

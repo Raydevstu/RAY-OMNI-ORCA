@@ -60,8 +60,12 @@ export async function request_confirmation(root: string, input: z.infer<typeof R
   if (isEditAction(input.action)) {
     const norm = normalizeAction(input.action);
     const raw = (input.action as { content?: unknown }).content;
-    return { fingerprint: fp, status: 'pending', gates, file: norm.file, contentSha256: norm.contentSha256,
-      preview: typeof raw === 'string' ? previewContent(root, raw) : undefined };
+    const pv = typeof raw === 'string' ? previewContent(root, raw) : null;
+    return { fingerprint: fp, status: 'pending', gates,
+      file: norm.file, contentSha256: norm.contentSha256,
+      preview: pv?.preview, totalLines: pv?.totalLines, totalBytes: pv?.totalBytes,
+      previewTruncated: pv?.truncated,
+      note: pv?.truncated ? 'Preview is truncated: approval covers the full content digest above. Review the remainder before approving.' : undefined };
   }
   return { fingerprint: fp, status: 'pending', gates };
 }
